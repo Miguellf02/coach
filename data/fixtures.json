@@ -1,0 +1,11 @@
+{
+  "_meta": "Real runs, transcribed from my Intervals.icu calendar (Strava archive import). Times rounded to the minute; no heart-rate sensor. Run names neutralised.",
+  "activities": [
+    {"id": "20190261079", "start_date_local": "2026-09-15T00:00:00", "type": "Run", "name": "Evening run", "distance": 4100, "moving_time": 1200, "average_heartrate": null},
+    {"id": "20218408905", "start_date_local": "2026-09-17T00:00:00", "type": "Run", "name": "Night run", "distance": 4200, "moving_time": 1200, "average_heartrate": null},
+    {"id": "20286845068", "start_date_local": "2026-09-22T00:00:00", "type": "Run", "name": "10K", "distance": 10000, "moving_time": 3180, "average_heartrate": null},
+    {"id": "20376962804", "start_date_local": "2026-09-29T00:00:00", "type": "Run", "name": "Afternoon run", "distance": 2800, "moving_time": 840, "average_heartrate": null},
+    {"id": "20568299001", "start_date_local": "2026-10-13T00:00:00", "type": "Run", "name": "Shakeout", "distance": 2800, "moving_time": 780, "average_heartrate": null},
+    {"id": "20630850959", "start_date_local": "2026-10-17T00:00:00", "type": "Run", "name": "Bilbao Night Half Marathon", "distance": 22000, "moving_time": 6720, "average_heartrate": null}
+  ]
+}
