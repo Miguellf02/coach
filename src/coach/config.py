@@ -21,3 +21,18 @@ class Settings(BaseSettings):
         default=310.0, gt=0, description="Threshold pace used for the load estimate (5:10/km)."
     )
     max_range_days: int = Field(default=31, gt=0)
+    spike_threshold_pct: float = Field(
+        default=30.0, gt=0, description="Week-over-average increase (%) that counts as a spike."
+    )
+    layoff_min_zero_weeks: int = Field(
+        default=2, ge=1, description="Consecutive 0 km weeks that count as a layoff."
+    )
+    max_weekly_increase_pct: float = Field(
+        default=10.0, ge=0, description="Max increase (%) used for the next week's km ceiling."
+    )
+    trend_window_weeks: int = Field(
+        default=4,
+        ge=2,
+        description="Weeks (target included) behind % change, flags and ceiling, fixed so the "
+        "trend does not depend on how many weeks a caller asks for.",
+    )

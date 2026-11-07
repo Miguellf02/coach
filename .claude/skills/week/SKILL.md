@@ -26,7 +26,8 @@ Call the Agent tool with `subagent_type: "analyst"` and the prompt `<the week>`.
 
 It must return one JSON object with exactly these keys: `week`, `distance_km`, `runs`,
 `longest_run_km`, `change_vs_prior_avg_pct`, `zero_weeks_streak`, `data_complete`,
-`blocked_count`, `flags`, `notes`. If the reply is not valid JSON or keys are missing, call
+`blocked_count`, `flags`, `inferred_flags`, `suggested_max_next_week_km`,
+`next_week_start`, `notes`. If the reply is not valid JSON or keys are missing, call
 the analyst once more saying what was wrong. If it fails again, stop and show the raw reply.
 
 ## 3. Planner (next week)
@@ -37,13 +38,15 @@ Subagents share no memory, so the hand-off is explicit. Call the Agent tool with
 ```
 Analyst JSON for <week>:
 <the analyst JSON, verbatim>
-Plan the following week.
+Plan the week starting on next_week_start.
 ```
 
 ## 4. Report
 
 Do not call any tool yourself, and do not recompute any number: use the JSON and the
-planner's output as they are. Write the report in this exact format:
+planner's output as they are. You cannot see the subagents' tool calls: never claim a
+subagent did or did not call a tool. If the planner states a fact that is not in the analyst
+JSON, keep it as it is (the planner can read more history than the analyst). Write the report in this exact format:
 
 ```
 # Training week <week>
@@ -59,11 +62,14 @@ planner's output as they are. Write the report in this exact format:
 | Longest run | <longest_run_km> km |
 | Change vs prior weeks' average | <change_vs_prior_avg_pct> % (or "n/a" + why) |
 | Consecutive 0 km weeks | <zero_weeks_streak> |
+| Next week's ceiling (computed) | <suggested_max_next_week_km> km (or "n/a: incomplete data") |
 
 <analyst notes>
 
 ## Flags
-<one bullet per flag with a plain-English meaning, or "None.">
+<one bullet per entry of `flags` with a plain-English meaning (computed by the server), then
+one bullet per entry of `inferred_flags` marked "(inferred from the run name)". "None." if
+both are empty.>
 
 ## Next week plan
 <the planner's output: question for the runner (if any), 7-day table, reasoning>

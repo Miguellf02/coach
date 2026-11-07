@@ -16,10 +16,10 @@ ALLOWED="mcp__coach__get_weekly_load,mcp__coach__get_activities,ReadMcpResourceT
 
 # id | week | fixture | markers that must appear | markers that must NOT appear
 CASES=(
-  "1|2026-W38|data/fixtures.json|8.3;missing_hr|load_spike;layoff"
-  "2|2026-W42|data/fixtures.json|race_detected;load_spike;481.3;recovery|"
-  "3|2026-W45|data/fixtures.json|layoff;?|"
-  "4|2026-W30|evals/synthetic/build_week.json|35;10.5|load_spike;layoff;missing_hr"
+  "1|2026-W38|data/fixtures.json|8.3;9.1;missing_hr|load_spike;layoff"
+  "2|2026-W42|data/fixtures.json|race_detected;inferred;load_spike;481.3;9.4;recovery|"
+  "3|2026-W45|data/fixtures.json|layoff;6.2;?|"
+  "4|2026-W30|evals/synthetic/build_week.json|35;10.5;38.5|load_spike;layoff;missing_hr"
 )
 FOOTER="Not medical or coaching advice"
 

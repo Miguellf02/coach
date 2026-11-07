@@ -6,16 +6,22 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from mcp.server.mcpserver.exceptions import ToolError
+from mcp.server.mcpserver.exceptions import ResourceError, ToolError
 
 from coach.analytics import estimate_load, format_pace, parse_iso_week, weekly_load
 from coach.config import Settings
-from coach.models import Activity, BlockedActivity
+from coach.models import Activity, BlockedActivity, LoadPolicy
 from coach.server import build_server
 from coach.sources import FixtureSource, _parse
 
 ROOT = Path(__file__).resolve().parents[1]
 TODAY = dt.date(2026, 11, 6)
+POLICY = LoadPolicy(
+    spike_threshold_pct=30,
+    layoff_min_zero_weeks=2,
+    max_weekly_increase_pct=10,
+    trend_window_weeks=4,
+)
 
 
 @pytest.fixture
@@ -85,11 +91,13 @@ def test_week_with_only_a_blocked_activity_is_not_rest() -> None:
         est_load=50.0,
     )
     blocked = [BlockedActivity(id="2", date=dt.date(2026, 10, 17), reason="Strava")]
-    out = weekly_load([prior_run], blocked, target_monday=dt.date(2026, 10, 12), n_weeks=2)
+    out = weekly_load([prior_run], blocked, dt.date(2026, 10, 12), n_weeks=2, policy=POLICY)
     assert out.weeks[-1].blocked_activities == 1
     assert out.data_complete is False
     assert out.zero_weeks_streak == 0
     assert out.change_vs_prior_avg_pct is None  # would otherwise be a fake -100 %
+    assert out.flags == ["incomplete_data"]
+    assert out.suggested_max_next_week_km is None  # an undercounted base gives no ceiling
 
 
 # --- the four eval weeks, at tool level ------------------------------------
@@ -103,6 +111,10 @@ async def test_race_week_is_a_spike(server: Any) -> None:
     assert target["longest_run_km"] == 22.0
     assert out["change_vs_prior_avg_pct"] is not None
     assert out["change_vs_prior_avg_pct"] > 300  # 24.8 km vs ~4.3 km/week before
+    assert out["flags"] == ["load_spike", "missing_hr"]
+    # After a spike: recent average (10 + 2.8 + 0 + 24.8) / 4, no increase.
+    assert out["suggested_max_next_week_km"] == 9.4
+    assert out["next_week_start"] == "2026-10-19"
 
 
 @pytest.mark.anyio
@@ -110,6 +122,29 @@ async def test_layoff_counts_zero_weeks(server: Any) -> None:
     out = await call(server, "get_weekly_load", week="2026-W45", n_weeks=4)
     assert out["zero_weeks_streak"] == 3
     assert out["weeks"][0]["week"] == "2026-W42"
+    assert out["flags"] == ["layoff"]  # no runs, so no missing_hr either
+    assert out["suggested_max_next_week_km"] == 6.2  # (24.8 + 0 + 0 + 0) / 4, no increase
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("week", ["2026-W38", "2026-W42", "2026-W45"])
+async def test_trend_does_not_depend_on_n_weeks(server: Any, week: str) -> None:
+    # Regression: a planner asking for 8 weeks once got a different ceiling than the analyst.
+    short = await call(server, "get_weekly_load", week=week, n_weeks=1)
+    long = await call(server, "get_weekly_load", week=week, n_weeks=8)
+    keys = ("change_vs_prior_avg_pct", "data_complete", "flags", "suggested_max_next_week_km")
+    assert {k: short[k] for k in keys} == {k: long[k] for k in keys}
+    assert len(short["weeks"]) == 1 and len(long["weeks"]) == 8
+
+
+@pytest.mark.anyio
+async def test_week_after_empty_weeks_keeps_its_own_base(server: Any) -> None:
+    # W38: 8.3 km after three empty weeks. The recent average (2.075) would cut the runner
+    # below the week they just ran, so the base is max(average, target week) = 8.3.
+    out = await call(server, "get_weekly_load", week="2026-W38", n_weeks=4)
+    assert out["flags"] == ["missing_hr"]
+    assert out["change_vs_prior_avg_pct"] is None
+    assert out["suggested_max_next_week_km"] == 9.1  # 8.3 x 1.10
 
 
 @pytest.mark.anyio
@@ -132,6 +167,16 @@ async def test_goal_resource_computes_days_to_race(server: Any) -> None:
     contents = await server.read_resource("coach://goal")
     goal = json.loads(contents[0].content)
     assert goal["days_to_race"] == (dt.date(2027, 4, 25) - TODAY).days
+
+
+@pytest.mark.anyio
+async def test_goal_counts_days_from_the_planned_week(server: Any) -> None:
+    contents = await server.read_resource("coach://goal/2026-10-19")
+    goal = json.loads(contents[0].content)
+    assert goal["as_of"] == "2026-10-19"
+    assert goal["days_to_race"] == 188  # 2026-10-19 -> 2027-04-25, not counted from today
+    with pytest.raises(ResourceError, match="use YYYY-MM-DD"):
+        await server.read_resource("coach://goal/next-monday")
 
 
 @pytest.fixture

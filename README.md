@@ -13,14 +13,15 @@ code. Built while preparing for the Claude Certified Architect – Foundations e
 | Piece | What it does |
 |---|---|
 | `get_activities` (tool) | Lists individual runs in a date range (max 31 days). |
-| `get_weekly_load` (tool) | Returns weekly totals plus trend, so the model never adds up kilometres itself. |
+| `get_weekly_load` (tool) | Returns weekly totals, trend, deterministic flags and next week's km ceiling, so the model never adds up or thresholds anything itself. |
 | `coach://goal` (resource) | Exposes the target race; it is static data, so it is a resource, not a tool. |
+| `coach://goal/{as_of}` (resource template) | Same race, with `days_to_race` counted in code from the Monday of the planned week. |
 | `sources.py` | Hides *where* data comes from (live API or frozen fixtures) behind one `Protocol`. |
-| `analytics.py` | Pure functions: every number the agent sees is computed and tested here. |
+| `analytics.py` | Pure functions: every number, flag and ceiling the agent sees is computed and tested here. |
 | `models.py` | Frozen Pydantic V2 models with units in every field name. |
 | `data/fixtures.json` | My real runs, frozen, so tests and evals are reproducible offline. |
-| `.claude/agents/analyst.md` | Subagent (Haiku) that reads one week with 2 tools and returns a fixed JSON contract. |
-| `.claude/agents/planner.md` | Subagent (Sonnet) that turns the analyst JSON and the race goal into a 7-day plan. |
+| `.claude/agents/analyst.md` | Subagent (Haiku) that reads one week with 2 tools, copies the server's flags and returns a fixed JSON contract. |
+| `.claude/agents/planner.md` | Subagent (Sonnet) that turns the analyst JSON and the race goal into a 7-day plan under the computed ceiling. |
 | `.claude/skills/week/SKILL.md` | The `/week` command: runs analyst → planner and owns the report format. |
 | `.claude/hooks/limit_activity_range.py` | PreToolUse hook that blocks `get_activities` calls over 14 days. |
 | `.claude/hooks/check_python.py` | PostToolUse hook that runs ruff and mypy after every `.py` edit and reports failures to Claude. |
@@ -35,7 +36,7 @@ code. Built while preparing for the Claude Certified Architect – Foundations e
 flowchart TD
     U["/week 2026-W42"] --> S["Skill /week<br/>(orchestrator, owns report format)"]
     S -->|"prompt: ISO week"| A["analyst subagent · Haiku<br/>tools: get_weekly_load, get_activities"]
-    A -->|"JSON contract"| S
+    A -->|"JSON contract: server flags + inferred_flags"| S
     S -->|"prompt: analyst JSON, verbatim"| P["planner subagent · Sonnet<br/>tools: get_weekly_load, ReadMcpResourceTool"]
     P -->|"7-day plan + reasoning"| S
     S --> R["Report: Summary · What happened · Flags ·<br/>Next week plan · Data caveats"]
@@ -44,7 +45,7 @@ flowchart TD
     H1 -->|"yes"| M
     H1 -->|"no: exit 2 + how to fix"| A
     A -. "get_weekly_load" .-> M[("coach MCP server<br/>read-only · 2 tools · 1 resource")]
-    P -. "get_weekly_load, coach://goal" .-> M
+    P -. "get_weekly_load, coach://goal/{next_week_start}" .-> M
     M --> D["Intervals.icu API<br/>or frozen fixtures"]
 
     E["Edit / Write of a .py file"] --> H2{{"PostToolUse hook<br/>ruff + mypy"}}
@@ -59,8 +60,7 @@ Output of `claude -p "/week 2026-W42"` against `data/fixtures.json`
 > # Training week 2026-W42
 >
 > ## Summary
-> Race week: a short shakeout on Tuesday, then the Bilbao Night Half Marathon on Saturday.
-> The plan for the following week is recovery, with only short easy runs.
+> W42 was a race week: a short shakeout and then a 22 km run named "Bilbao Night Half Marathon", after one week at 0 km and one at 2.8 km. Next week is for recovery, with only short, easy runs while you rebuild your base.
 >
 > ## What happened
 > | Metric | Value |
@@ -70,45 +70,33 @@ Output of `claude -p "/week 2026-W42"` against `data/fixtures.json`
 > | Longest run | 22 km |
 > | Change vs prior weeks' average | 481.3 % |
 > | Consecutive 0 km weeks | 0 |
+> | Next week's ceiling (computed) | 9.4 km |
 >
-> Two runs: a 2.8 km shakeout on 2026-10-13 and the 22.0 km Bilbao Night Half Marathon on
-> 2026-10-17. Heart rate is missing for both runs (missing_heart_rate = 2), so no HR values
-> are reported. The week has no blocked activities.
+> Two runs: a 2.8 km Shakeout on 2026-10-13 and a 22 km run named 'Bilbao Night Half Marathon' on 2026-10-17, which matches the race name pattern. Heart rate is missing for both runs (missing_heart_rate: 2), so no HR values are reported. The week follows W41 with 0 km and W40 with 2.8 km, and the change figure is relative to the prior weeks' average as returned by the tool.
 >
 > ## Flags
-> - **load_spike**: this week's distance was far above the average of the weeks before it.
->   Here that comes from the race, not from a sudden jump in normal training.
-> - **race_detected**: one of the runs was a race, the Bilbao Night Half Marathon.
-> - **missing_hr**: neither run has heart rate data, so effort can't be judged from heart rate.
+> - **load_spike**: this week's distance was far above your recent weekly average (here +481.3 %), which raises the risk of injury.
+> - **missing_hr**: at least one run has no heart-rate data.
+> - **race_detected** (inferred from the run name): the 22 km run on 2026-10-17 looks like a race ("Bilbao Night Half Marathon").
 >
 > ## Next week plan
+> Week starting 2026-10-19:
+>
 > | Day | Session | Approx. km |
 > |---|---|---|
 > | Mon | Rest | 0 |
-> | Tue | Easy run, conversational effort, flat terrain | 4 |
+> | Tue | Easy, conversational run | 3 |
 > | Wed | Rest | 0 |
-> | Thu | Easy run, conversational effort | 5 |
+> | Thu | Easy, conversational run | 3 |
 > | Fri | Rest | 0 |
-> | Sat | Easy run, relaxed and short of tired, no pushing the pace | 5 |
-> | Sun | Very easy run or walk/jog, just loosening up | 3 |
+> | Sat | Easy, conversational run, flat and relaxed | 3 |
+> | Sun | Rest | 0 |
 >
-> Reasoning: The reference week is 2026-W42 at 24.8 km. It included a 22 km half marathon and
-> was flagged `load_spike` and `race_detected`, so next week is a recovery week at about 17 km,
-> below the reference. It has no long run and no intensity, and the effort is described by
-> feel because heart rate is missing. With 169 days to the Maratón de Madrid (25 April 2027),
-> there is plenty of time to absorb the race and then build base mileage gradually. Nothing
-> needs to be made up.
+> Reasoning: The code-computed ceiling for next week is `suggested_max_next_week_km` = 9.4 km, and this plan totals about 9 km. W42 has a `load_spike` flag and a detected race (the Bilbao Night Half Marathon), so this is a recovery week. All runs are easy with no long run and no intensity. Heart rate is missing, so effort should be judged by feel: you should be able to hold a conversation throughout. With the Maratón de Madrid 188 days away (counted from 2026-10-19), there is plenty of time to rebuild a base gradually, and nothing is gained by adding load right after the half marathon.
 >
 > ## Data caveats
-> - Heart rate is missing for both runs.
-> - The week after W42 is 2026-W43, which has already happened, so this plan describes what
->   recovery should have looked like rather than an upcoming week. The 169-day countdown is
->   counted from today (2026-11-07), not from W43.
-> - The +481.3 % change compares a race week with lighter weeks before it, so it overstates
->   how much training load really rose.
-> - The half marathon is recorded as 22.0 km, a bit over the official 21.1 km. This is
->   probably GPS overshoot.
-> - No blocked activities; data is complete.
+> - Heart rate is missing for both runs, so effort and intensity can't be checked.
+> - The +481.3 % change is measured against a very low baseline (0 km in W41, 2.8 km in W40), so the percentage looks bigger than the actual jump in km.
 >
 > ---
 > *Not medical or coaching advice.*
@@ -122,10 +110,20 @@ every report by hand against the expected behaviour.
 
 | # | Week | Data | Expected | Markers | Review | Result |
 |---|---|---|---|---|---|---|
-| 1 | 2026-W38 | real | Low irregular volume stated calmly; null % change explained; plan stays ~8 km | PASS | 8.3 km, `missing_hr` only, no alarm words, plan ≈ 8 km | **PASS** |
-| 2 | 2026-W42 | real | Race + spike detected; recovery week | PASS | `race_detected` + `load_spike`, plan ≈ 17 km all easy, no long run | **PASS** |
-| 3 | 2026-W45 | real | `layoff`, progressive return, question about the cause | PASS | streak 3, question asked first, plan ≈ 10 km, "week in progress" caveat | **PASS** |
-| 4 | 2026-W30 | **synthetic** | Normal build: no flags, ≤ ~10 % increase, long run kept | PASS | no flags, plan ≈ 36 km (cap ≈ 38.5), long run 14 km | **PASS** |
+| 1 | 2026-W38 | real | Low irregular volume stated calmly; null % change explained; plan ≤ 9.1 km | PASS | `missing_hr` only, no alarm words, weeks named by label, plan ≈ 9 km, 216 days from 2026-09-21 | **PASS** |
+| 2 | 2026-W42 | real | Spike (server) + race (inferred, labelled); recovery week ≤ 9.4 km | PASS | `race_detected` marked as inferred, plan ≈ 9 km all easy, 188 days from 2026-10-19 | **PASS** |
+| 3 | 2026-W45 | real | `layoff`, question about the cause, return ≤ 6.2 km | PASS | question asked first, plan ≈ 6 km, "week in progress" caveat, 167 days from 2026-11-09 | **PASS** |
+| 4 | 2026-W30 | **synthetic** | Normal build: no flags, plan ≤ 38.5 km, long run kept | PASS | no flags, plan ≈ 37 km, long run 14 km, 272 days from 2026-07-27 | **PASS** |
+
+**What the evals caught on the way to 4/4** (fixed in code or prompts, never in the tests):
+
+- *Code bug (case 3).* The planner asked `get_weekly_load` for 8 weeks and got a 5.7 km
+  ceiling while the analyst had 6.2 km: the trend depended on the caller's `n_weeks`. Fixed
+  with a fixed `trend_window_weeks=4` and a regression test.
+- *Prompt (case 1).* The analyst counted weeks itself ("four weeks at 0 km", there were
+  three). Now it names weeks by their labels; the planner got the same rule.
+- *Prompt (cases 1 and 3).* The orchestrator claimed a subagent "did not call" a tool. It
+  cannot see subagent tool calls, so the skill now forbids that claim.
 
 > **Case 4 uses synthetic data.** `evals/synthetic/build_week.json` is invented (four weeks of
 > 30, 32, 33 and 35 km with heart rate) to cover the "everything is normal" path, which my
@@ -159,8 +157,21 @@ the PostToolUse hook made Claude remove an unused import and add type hints).
 
 ## Design decisions
 
-- **Arithmetic in code, judgement in the model.** Load, pace, weekly change and zero-week
-  streaks are computed in `analytics.py`. The LLM interprets; it does not calculate.
+- **Arithmetic in code, judgement in the model.** Load, pace, weekly change, zero-week
+  streaks, the flags (`load_spike`, `layoff`, `incomplete_data`, `missing_hr`) and next
+  week's km ceiling are computed in `analytics.py`, with thresholds in `config.py`
+  (`spike_threshold_pct=30`, `layoff_min_zero_weeks=2`, `max_weekly_increase_pct=10`).
+  The LLM interprets; it does not calculate or pick thresholds. The only model-made flag is
+  `race_detected` (a guess from the run name), and it travels in a separate
+  `inferred_flags` list so the report marks it as an inference.
+- **The next-week ceiling rule.** Recent average = mean km of the returned weeks. Normal
+  week: max(recent average, target week) × 1.10. After a spike or a layoff: the recent
+  average, no increase. Incomplete data: no ceiling (`null`). The `max()` is there because a
+  plain "average × 1.10" would cap W38 (8.3 km after three empty weeks) at 2.3 km, below the
+  week the runner just ran.
+- **`days_to_race` from the planned week, in code.** `get_weekly_load` returns
+  `next_week_start`, and the planner reads `coach://goal/<next_week_start>`. The countdown
+  is computed by the server; the model only copies a date string.
 - **Read-only by construction.** The server only exposes GET calls and every tool is annotated
   `readOnlyHint=true`. Safety does not depend on a prompt.
 - **Actionable errors.** A bad request returns `isError` with a message that tells the agent how
@@ -208,7 +219,7 @@ Fix: import your Strava archive into Intervals.icu once, instead of syncing from
 ```bash
 uv sync
 cp .env.example .env          # add your Intervals.icu API key, or use fixtures mode
-uv run pytest                 # 10 tests, fully offline
+uv run pytest                 # 15 tests, fully offline
 ```
 
 With Claude Code, open the folder: `.mcp.json` registers the server automatically (project scope).

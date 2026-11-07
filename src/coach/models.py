@@ -5,12 +5,24 @@ whether a number is metres or kilometres, seconds or minutes.
 """
 
 import datetime as dt
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+Flag = Literal["load_spike", "layoff", "incomplete_data", "missing_hr"]
 
 
 class _Frozen(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class LoadPolicy(_Frozen):
+    """Thresholds behind the deterministic flags and the next-week ceiling (from Settings)."""
+
+    spike_threshold_pct: float = Field(gt=0)
+    layoff_min_zero_weeks: int = Field(ge=1)
+    max_weekly_increase_pct: float = Field(ge=0)
+    trend_window_weeks: int = Field(ge=2)
 
 
 class Activity(_Frozen):
@@ -77,7 +89,8 @@ class WeeklyLoadResult(_Frozen):
     target_week: str
     change_vs_prior_avg_pct: float | None = Field(
         description=(
-            "Distance change of the target week vs the average of the previous weeks, in %. "
+            "Distance change of the target week vs the average of the 3 weeks before it "
+            "(fixed trend window, whatever n_weeks is), in %. "
             "Null when the previous weeks have zero distance (change is undefined) or when "
             "data_complete is false (the totals undercount)."
         )
@@ -90,9 +103,29 @@ class WeeklyLoadResult(_Frozen):
     )
     data_complete: bool = Field(
         description=(
-            "False if any returned week has blocked activities: its totals undercount, so do "
-            "not read low numbers there as rest."
+            "False if any week of the trend window (target + 3 weeks before) has blocked "
+            "activities: its totals undercount, so do not read low numbers there as rest."
         )
+    )
+    flags: list[Flag] = Field(
+        description=(
+            "Deterministic flags for the target week. load_spike: change_vs_prior_avg_pct is "
+            "above the spike threshold. layoff: zero_weeks_streak reaches the layoff minimum. "
+            "incomplete_data: data_complete is false. missing_hr: a run in the target week "
+            "has no heart rate."
+        )
+    )
+    suggested_max_next_week_km: float | None = Field(
+        description=(
+            "Ceiling for next week's distance (km). Recent average = mean distance of the "
+            "trend window (target + 3 weeks before, whatever n_weeks is). Normal week: "
+            "max(recent average, target week) x (1 + max weekly increase). After load_spike "
+            "or layoff: the recent average, no increase. Null when data_complete is false "
+            "(the totals undercount)."
+        )
+    )
+    next_week_start: dt.date = Field(
+        description="Monday of the week after the target week: the week being planned."
     )
 
 
@@ -103,4 +136,5 @@ class Goal(_Frozen):
     race_date: dt.date
     distance_km: float
     target_time: str | None = None
-    days_to_race: int
+    as_of: dt.date = Field(description="The day days_to_race is counted from.")
+    days_to_race: int = Field(description="Days from as_of to race_date.")

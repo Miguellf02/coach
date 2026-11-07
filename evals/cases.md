@@ -1,6 +1,8 @@
 # Eval cases for `/week`
 
-Each case runs `/week <week>` headless against a frozen fixture. `run_evals.sh` checks the
+Each case runs `/week <week>` headless against a frozen fixture. Flags (`load_spike`,
+`layoff`, `incomplete_data`, `missing_hr`) and the next-week ceiling come from the server;
+only `race_detected` is the analyst's inference. `run_evals.sh` checks the
 deterministic markers (grep); a human review checks the judgement (tone, plan, reasoning).
 Results and the pass/fail table live in the README.
 
@@ -21,20 +23,22 @@ Expected:
 - `change_vs_prior_avg_pct` is null and the report says why (prior weeks at 0 km). No % invented.
 - Flags: `missing_hr` only. No `load_spike`, no `layoff`.
 - Tone: states the facts without alarm (no "warning", "danger", "concerning").
-- The plan builds gently from about 8 km; no jump to a "normal" volume.
+- Ceiling 9.1 km (max(recent average 2.1, target 8.3) × 1.10); the plan stays at or below it.
 
-Markers: `8.3`, `missing_hr`, `Not medical or coaching advice`; must NOT contain `load_spike` or `layoff`.
+Markers: `8.3`, `9.1`, `missing_hr`, `Not medical or coaching advice`; must NOT contain `load_spike` or `layoff`.
 
 ## 2. 2026-W42: Bilbao Night Half Marathon
 
 A 2.8 km shakeout and the 22 km Bilbao Night Half Marathon after weeks of very low volume.
 
 Expected:
-- Flags: `race_detected` and `load_spike` (+481.3 %), plus `missing_hr`.
-- The plan is a recovery week: total below 24.8 km, all easy, no long run, no intensity.
-- Reasoning mentions the race and `days_to_race` (Madrid Marathon).
+- Server flags: `load_spike` (+481.3 %) and `missing_hr`; inferred: `race_detected`, marked
+  as an inference.
+- Ceiling 9.4 km (recent average, no increase after a spike); the plan is a recovery week at
+  or below it, all easy, no long run, no intensity.
+- Reasoning mentions the race and `days_to_race` counted from 2026-10-19 (188 days).
 
-Markers: `race_detected`, `load_spike`, `481.3`, `recovery` (case-insensitive), `Not medical or coaching advice`.
+Markers: `race_detected`, `inferred`, `load_spike`, `481.3`, `9.4`, `recovery` (case-insensitive), `Not medical or coaching advice`.
 
 ## 3. 2026-W45: three weeks at 0 km
 
@@ -44,11 +48,11 @@ Expected:
 - `zero_weeks_streak` = 3 and the `layoff` flag.
 - The plan asks the runner, explicitly, why they stopped (injury, illness, holidays…)
   before adding load.
-- Progressive return: short easy runs, total well below the last normal week.
+- Ceiling 6.2 km (recent average, no increase after a layoff); progressive return at or below it.
 - Never tries to make up lost kilometres.
 - Data caveats say W45 is still in progress (the eval runs before Sunday 2026-11-08).
 
-Markers: `layoff`, `?` in the plan section, `Not medical or coaching advice`.
+Markers: `layoff`, `6.2`, `?` in the plan section, `Not medical or coaching advice`.
 
 ## 4. 2026-W30: normal build week (SYNTHETIC)
 
@@ -57,7 +61,7 @@ The target week is +10.5 % vs the previous three weeks' average.
 
 Expected:
 - No flags at all (no spike: +10.5 % is under the 30 % threshold; HR present).
-- The plan keeps building: total at or below about 10 % above 35 km (≤ ~38.5 km), includes a
-  long run, no recovery week, no question for the runner.
+- Ceiling 38.5 km (35 × 1.10); the plan keeps building at or below it, includes a long run,
+  no recovery week, no question for the runner.
 
-Markers: `35`, `10.5`, `Not medical or coaching advice`; must NOT contain `load_spike`, `layoff`, `missing_hr`.
+Markers: `35`, `10.5`, `38.5`, `Not medical or coaching advice`; must NOT contain `load_spike`, `layoff`, `missing_hr`.

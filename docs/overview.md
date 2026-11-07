@@ -18,13 +18,13 @@ This project asks the opposite question: what is the *smallest* system that can 
                       ▼                         ▼
           analyst  (Haiku)          ──JSON──►  planner  (Sonnet)
           tools: get_weekly_load,     contract  tools: get_weekly_load,
-                 get_activities                        read coach://goal
+                 get_activities                        read coach://goal/<date>
                       │                         │
      PreToolUse hook: │ max 14 days             │
                       ▼                         ▼
           ┌───────────────────────────────────────────────┐
           │  coach MCP server  (read-only, Python)        │
-          │  2 tools · 1 resource · all maths in code     │
+          │  2 tools · goal resource · all maths in code  │
           └─────────────────────┬─────────────────────────┘
                                 ▼
                  Intervals.icu API  or  frozen fixtures
@@ -36,8 +36,10 @@ This project asks the opposite question: what is the *smallest* system that can 
 ```
 
 The **analyst** reads one week and returns a fixed JSON object (distance, runs, % change,
-zero-week streak, data completeness, flags). The **planner** receives that JSON in its prompt,
-reads the target race, and proposes seven days. The **skill** chains them and writes the
+zero-week streak, data completeness, flags, next week's km ceiling). Every number, flag and
+ceiling comes from the server; the only model-made flag, `race_detected`, is marked as an
+inference. The **planner** receives that JSON in its prompt, reads the target race counted
+from the planned week, and proposes seven days under the ceiling. The **skill** chains them and writes the
 report. Each subagent sees only the tools it needs, in its own context window.
 
 **A real edge case: Strava and the Bilbao half marathon.** My data lives in Intervals.icu,
@@ -52,10 +54,13 @@ later it flags a `layoff` and asks *why* I stopped before adding any load.
 **Quality.**
 
 - `mypy --strict` and `ruff` on all code; Pydantic V2 models with units in every field name.
-- 10 offline tests on frozen fixtures: no network, no API key, reproducible.
+- 15 offline tests on frozen fixtures: no network, no API key, reproducible.
 - 4 headless evals (`claude -p "/week <week>"`): three real edge cases (low irregular volume,
   race plus spike, three-week layoff) and one clearly labelled synthetic build week. A script
   checks deterministic markers; a human review checks tone and plan quality. All 4 pass.
+  The evals earned their keep: they caught the planner getting a different km ceiling than
+  the analyst because the trend window depended on the caller's `n_weeks`. Fixed in code,
+  with a regression test.
 - Hooks tested with passing and failing cases, both standalone and inside a live session.
 
 <!-- pagebreak -->
@@ -66,13 +71,14 @@ later it flags a `layoff` and asks *why* I stopped before adding any load.
 |---|---|---|
 | Few tools | Two tools with distinct jobs, so the agent never has to choose between near-duplicates. | `src/coach/server.py` |
 | Tools vs resources | The race goal is static data, so it is a resource the agent reads, not a tool it calls. | `server.py` (`coach://goal`) |
-| Arithmetic in code | Totals, % change and streaks are computed and tested in Python; the model only interprets. | `src/coach/analytics.py` |
+| Arithmetic in code | Totals, % change, streaks, flags and the next-week ceiling are computed and tested in Python; the model only interprets. | `src/coach/analytics.py` |
 | Actionable errors | Every error says how to fix the call ("range is 152 days; max is 31, narrow it"). | `server.py`, `.claude/hooks/` |
 | Read-only by design | The server only issues GET requests and annotates every tool as read-only. | `server.py`, `sources.py` |
 | Least privilege per subagent | Each subagent has an explicit tool allowlist; without it, it would inherit every tool. | `.claude/agents/*.md` |
 | Right model for the job | Extraction runs on a small, fast model; planning on a stronger one. | `.claude/agents/*.md` |
 | Context isolation | Analysis and planning run in separate context windows, so raw tool output never floods the planner. | `.claude/skills/week/SKILL.md` |
 | Explicit hand-off contract | Subagents share no memory; the analyst returns a fixed JSON that the orchestrator passes on verbatim. | `analyst.md`, `SKILL.md` |
+| Inference is labelled | What the model guesses (a race, from the run name) travels apart from what code computed. | `analyst.md` (`inferred_flags`) |
 | Progressive disclosure | The report format lives in the skill and loads only when the report command runs, not in every session. | `.claude/skills/week/SKILL.md` |
 | Hooks as deterministic guarantees | A rule that must always hold is code that runs on every call, not a sentence in a prompt. | `.claude/settings.json`, `.claude/hooks/` |
 | Server validity vs client policy | The server rejects invalid requests (> 31 days); a stricter client hook (> 14 days) protects the context. | `limit_activity_range.py` |
@@ -82,8 +88,8 @@ later it flags a `layoff` and asks *why* I stopped before adding any load.
 | Evals with real edge cases | The system is tested on the weeks where it is most likely to be wrong. | `evals/` |
 | Scope discipline | Ideas that would widen the system go to a roadmap instead of into the code. | `ROADMAP.md` |
 
-**What I would do next.** Move the last judgement thresholds (spike, layoff, the 10 % cap)
-from prompts into tested code; validate the analyst's JSON with a hook before the planner
-sees it; add an LLM-as-judge step with a rubric for each eval case.
+**What I would do next.** Detect races in code instead of from run names; validate the
+analyst's JSON with a hook before the planner sees it; add an LLM-as-judge step with a
+rubric for each eval case.
 
 *Not medical or coaching advice. A learning project about agent architecture.*

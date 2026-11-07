@@ -3,6 +3,7 @@
 - get_activities   (tool)     -> individual runs in a date range
 - get_weekly_load  (tool)     -> weekly totals + trend, computed in code
 - coach://goal     (resource) -> the target race; static data, so a resource, not a tool
+- coach://goal/{as_of} (resource template) -> the same, with days_to_race counted from as_of
 """
 
 import datetime as dt
@@ -10,13 +11,13 @@ import json
 from typing import Annotated
 
 from mcp.server.mcpserver import MCPServer
-from mcp.server.mcpserver.exceptions import ToolError
+from mcp.server.mcpserver.exceptions import ResourceError, ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from coach.analytics import normalise, parse_iso_week, weekly_load
 from coach.config import Settings
-from coach.models import ActivitiesResult, Goal, WeeklyLoadResult
+from coach.models import ActivitiesResult, Goal, LoadPolicy, WeeklyLoadResult
 from coach.sources import ActivitySource, FixtureSource, IntervalsSource, SourceError
 
 READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True)
@@ -33,6 +34,12 @@ Some activities may be blocked (exist but unreadable): report them, never treat 
 def build_server(settings: Settings, source: ActivitySource, today: dt.date) -> MCPServer:
     mcp = MCPServer(name="coach", instructions=INSTRUCTIONS)
     threshold = settings.threshold_pace_sec_per_km
+    policy = LoadPolicy(
+        spike_threshold_pct=settings.spike_threshold_pct,
+        layoff_min_zero_weeks=settings.layoff_min_zero_weeks,
+        max_weekly_increase_pct=settings.max_weekly_increase_pct,
+        trend_window_weeks=settings.trend_window_weeks,
+    )
 
     @mcp.tool(annotations=READ_ONLY)
     def get_activities(
@@ -78,25 +85,43 @@ def build_server(settings: Settings, source: ActivitySource, today: dt.date) -> 
         week and the weeks before it, oldest first. Also returns the % change vs the previous
         weeks' average and how many consecutive 0 km weeks end at the target week.
         Weeks with blocked (unreadable) activities undercount and set data_complete=false.
+        Also returns deterministic flags (load_spike, layoff, incomplete_data, missing_hr),
+        a ceiling for next week's km and next_week_start (the Monday of the planned week).
         This is the main tool for 'how was my week' and for planning the next one."""
         try:
             target_monday = parse_iso_week(week)
         except ValueError as exc:
             raise ToolError(str(exc)) from exc
-        first_monday = target_monday - dt.timedelta(weeks=n_weeks - 1)
+        span = max(n_weeks, policy.trend_window_weeks)  # the trend needs its full window
+        first_monday = target_monday - dt.timedelta(weeks=span - 1)
         try:
             fetched = source.fetch(first_monday, target_monday + dt.timedelta(days=6))
         except SourceError as exc:
             raise ToolError(str(exc)) from exc
         runs = [normalise(r, threshold) for r in fetched.runs]
-        return weekly_load(runs, fetched.blocked, target_monday, n_weeks)
+        return weekly_load(runs, fetched.blocked, target_monday, n_weeks, policy)
+
+    def load_goal(as_of: dt.date) -> str:
+        data = json.loads(settings.goal_path.read_text(encoding="utf-8"))
+        race_date = dt.date.fromisoformat(data["race_date"])
+        return Goal(**data, as_of=as_of, days_to_race=(race_date - as_of).days).model_dump_json()
 
     @mcp.resource("coach://goal", mime_type="application/json")
     def goal() -> str:
-        """The target race (name, date, distance, target time) and days left until it."""
-        data = json.loads(settings.goal_path.read_text(encoding="utf-8"))
-        race_date = dt.date.fromisoformat(data["race_date"])
-        return Goal(**data, days_to_race=(race_date - today).days).model_dump_json()
+        """The target race (name, date, distance, target time) and days left from today."""
+        return load_goal(today)
+
+    @mcp.resource("coach://goal/{as_of}", mime_type="application/json")
+    def goal_as_of(as_of: str) -> str:
+        """The target race with days_to_race counted from as_of (YYYY-MM-DD). Use the
+        next_week_start from get_weekly_load to count from the Monday of the planned week."""
+        try:
+            day = dt.date.fromisoformat(as_of)
+        except ValueError as exc:
+            raise ResourceError(
+                f"Invalid as_of {as_of!r}; use YYYY-MM-DD, e.g. coach://goal/2026-10-19."
+            ) from exc
+        return load_goal(day)
 
     return mcp
 
